@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Denise &amp; Miguel · Disposable Camera</title>
+<style>
+:root{--pine:#01411C;--hunter:#355E3B;--amethyst:#9966CC;--violet:#32174D;--peri:#C3C6F5;--ivory:#FAF6EA;--ink:#1b1b1b}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--ivory);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.screen{display:none;min-height:100%;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom);flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:16px}
+.screen.on{display:flex}
+h1{font-size:2rem;font-weight:800;letter-spacing:.5px}
+h1 .d{color:var(--hunter)}h1 .m{color:var(--amethyst)}
+p{max-width:340px;line-height:1.5}
+input{width:100%;max-width:320px;padding:14px;border:2px solid var(--hunter);border-radius:12px;font-size:1rem;background:#fff}
+button{font:inherit;font-weight:700;border:0;border-radius:999px;padding:14px 28px;cursor:pointer;background:var(--pine);color:#fff}
+button.alt{background:var(--violet)}button.ghost{background:transparent;color:var(--pine);border:2px solid var(--pine)}
+button:disabled{opacity:.4}
+#cam,#rev{background:#000;padding:0;justify-content:space-between;gap:0}
+video,#revimg{width:100%;flex:1;min-height:0;object-fit:cover}
+.bar{width:100%;display:flex;align-items:center;justify-content:space-around;padding:14px 10px calc(14px + env(safe-area-inset-bottom));background:var(--pine);color:#fff}
+.count{font-weight:800;font-size:1.1rem;min-width:70px}
+.shutter{width:72px;height:72px;border-radius:50%;padding:0;background:#fff;border:6px solid var(--peri)}
+.top{width:100%;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:var(--pine);color:#fff;display:flex;justify-content:space-between;align-items:center}
+.top button{padding:8px 16px;background:var(--amethyst)}
+#roll{justify-content:flex-start;padding-top:calc(20px + env(safe-area-inset-top))}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:100%;max-width:480px}
+.th{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden}
+.th img{width:100%;height:100%;object-fit:cover}
+.th button{position:absolute;top:4px;right:4px;padding:2px 9px;font-size:1rem;background:rgba(50,23,77,.9)}
+.msg{color:var(--violet);font-weight:600;min-height:1.4em}
+</style>
+</head>
+<body>
+
+<section class="screen on" id="start">
+  <h1><span class="d">Denise</span> &amp; <span class="m">Miguel</span></h1>
+  <p>Your disposable camera for the night. You get <b>50 shots</b>. Review each one, retake or delete it, then send your favorites to the couple.</p>
+  <input id="fname" placeholder="First name" maxlength="30" autocomplete="given-name">
+  <input id="lname" placeholder="Last name" maxlength="30" autocomplete="family-name">
+  <p style="font-size:.9rem">Come back anytime with the same name to pick up where you left off.</p>
+  <button id="go">Open camera</button>
+  <p class="msg" id="startmsg"></p>
+</section>
+
+<section class="screen" id="cam">
+  <div class="top"><span class="count" id="left1"></span><button id="toroll">Review &amp; send</button></div>
+  <video id="vid" playsinline muted autoplay></video>
+  <div class="bar">
+    <button class="alt" id="flip">Flip</button>
+    <button class="shutter" id="snap" aria-label="Take photo"></button>
+    <span class="count" id="pend"></span>
+  </div>
+</section>
+
+<section class="screen" id="rev">
+  <img id="revimg" alt="Preview">
+  <div class="bar">
+    <button class="alt" id="retake">Retake</button>
+    <button id="keep">Keep</button>
+    <button class="ghost" style="color:#fff;border-color:#fff" id="trash">Delete</button>
+  </div>
+</section>
+
+<section class="screen" id="roll">
+  <h1 style="font-size:1.5rem">Your photos</h1>
+  <p id="rollinfo"></p>
+  <div class="grid" id="grid"></div>
+  <button id="send">Send to Denise &amp; Miguel</button>
+  <button class="ghost" id="back">Back to camera</button>
+  <p class="msg" id="rollmsg"></p>
+</section>
+
+<script>
+const MAX = 50;
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzQ1MFw-WCHSeZuAKa17E76zORBXN2sQ08Lhg9Y2HeNCFOzvggYa_Az5n918JUelz9o/exec';
+const $ = id => document.getElementById(id);
+let stream, facing = 'environment', pending = [], current = null, busy = false, used = 0, first = '', last = '';
+
+const left = () => MAX - used - pending.length;
+async function api(action) {
+  const u = SCRIPT_URL + '?action=' + action + '&first=' + encodeURIComponent(first) + '&last=' + encodeURIComponent(last);
+  const j = await (await fetch(u)).json();
+  if (!j.ok) throw new Error(j.error);
+  return j;
+}
+try { const n = JSON.parse(localStorage.getItem('dm_name')); $('fname').value = n[0]; $('lname').value = n[1]; } catch (e) {}
+const show = id => { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); };
+
+function refresh() {
+  $('left1').textContent = left() + ' left';
+  $('pend').textContent = pending.length + ' kept';
+  $('snap').disabled = left() <= 0;
+}
+
+async function startCam() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1920 } }, audio: false });
+  $('vid').srcObject = stream;
+}
+
+$('go').onclick = async () => {
+  first = $('fname').value.trim(); last = $('lname').value.trim();
+  if (!first || !last) { $('startmsg').textContent = 'Please enter your first and last name.'; return; }
+  $('go').disabled = true; $('startmsg').textContent = 'One moment\u2026';
+  try { used = (await api('start')).count; }
+  catch (e) { $('startmsg').textContent = 'Could not connect. Check your signal and try again.'; $('go').disabled = false; return; }
+  try { localStorage.setItem('dm_name', JSON.stringify([first, last])); } catch (e) {}
+  if (left() <= 0) { $('startmsg').textContent = 'You\u2019ve used all ' + MAX + ' shots. Thank you!'; $('go').disabled = false; return; }
+  try { await startCam(); refresh(); show('cam'); $('startmsg').textContent = used ? 'Welcome back!' : ''; }
+  catch (e) { $('startmsg').textContent = 'Camera access is needed. Please allow it in your browser and try again.'; }
+  $('go').disabled = false;
+};
+$('flip').onclick = async () => { facing = facing === 'environment' ? 'user' : 'environment'; try { await startCam(); } catch (e) {} };
+
+$('snap').onclick = () => {
+  const v = $('vid'); if (!v.videoWidth || left() <= 0) return;
+  const scale = Math.min(1, 1600 / Math.max(v.videoWidth, v.videoHeight));
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth * scale; c.height = v.videoHeight * scale;
+  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  c.toBlob(b => { current = { blob: b, url: URL.createObjectURL(b) }; $('revimg').src = current.url; show('rev'); }, 'image/jpeg', 0.82);
+};
+
+const dropCurrent = () => { if (current) URL.revokeObjectURL(current.url); current = null; refresh(); show('cam'); };
+$('retake').onclick = dropCurrent;
+$('trash').onclick = dropCurrent;
+$('keep').onclick = () => { pending.push(current); current = null; refresh(); show('cam'); };
+
+function renderRoll() {
+  $('rollinfo').textContent = pending.length ? 'Delete any you don\u2019t want, then send.' : 'No photos waiting. Go take some!';
+  $('send').disabled = !pending.length || busy;
+  $('grid').innerHTML = '';
+  pending.forEach((p, i) => {
+    const d = document.createElement('div'); d.className = 'th';
+    d.innerHTML = '<img src="' + p.url + '" alt="">';
+    const x = document.createElement('button'); x.textContent = '\u00d7'; x.setAttribute('aria-label', 'Delete photo');
+    x.onclick = () => { URL.revokeObjectURL(p.url); pending.splice(i, 1); refresh(); renderRoll(); };
+    d.appendChild(x); $('grid').appendChild(d);
+  });
+}
+$('toroll').onclick = () => { $('rollmsg').textContent = ''; renderRoll(); show('roll'); };
+$('back').onclick = () => { refresh(); show('cam'); };
+
+const toB64 = b => new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result.split(',')[1]); f.readAsDataURL(b); });
+
+$('send').onclick = async () => {
+  busy = true; $('send').disabled = true;
+  const total = pending.length, expected = used + total; let done = 0;
+  try {
+    while (pending.length) {
+      $('rollmsg').textContent = 'Sending ' + (done + 1) + ' of ' + total + '\u2026';
+      const p = pending[0];
+      await fetch(SCRIPT_URL, {
+        method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ first, last, filename: Date.now() + '_' + done + '.jpg', data: await toB64(p.blob) })
+      });
+      URL.revokeObjectURL(p.url); pending.shift(); done++; used++;
+      refresh(); renderRoll();
+    }
+    let ok = true;
+    try { used = (await api('status')).count; ok = used >= expected; } catch (e) {}
+    refresh();
+    $('rollmsg').textContent = ok ? 'Sent! Thank you \u2014 ' + done + ' photo' + (done === 1 ? '' : 's') + ' delivered.'
+      : 'Some photos may not have arrived. Please check your signal and shoot again if needed.';
+  } catch (e) {
+    $('rollmsg').textContent = 'Connection problem. Your remaining photos are safe \u2014 tap Send to retry.';
+  }
+  busy = false; renderRoll();
+};
+
+window.addEventListener('beforeunload', e => { if (pending.length) { e.preventDefault(); e.returnValue = ''; } });
+</script>
+</body>
+</html>
